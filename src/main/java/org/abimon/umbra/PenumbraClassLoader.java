@@ -1,7 +1,5 @@
 package org.abimon.umbra;
 
-import sun.reflect.Reflection;
-
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.net.URL;
@@ -12,10 +10,6 @@ public class PenumbraClassLoader extends ClassLoader {
         super(originalClassLoader.getParent());
 
         parentField.set(originalClassLoader, this);
-    }
-
-    public PenumbraClassLoader() throws IllegalAccessException {
-        this(Reflection.getCallerClass().getClassLoader());
     }
 
     @Override

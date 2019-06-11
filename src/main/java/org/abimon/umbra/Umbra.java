@@ -2,12 +2,12 @@ package org.abimon.umbra;
 
 import java.io.*;
 import java.net.HttpURLConnection;
-import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.regex.Pattern;
 
 public class Umbra {
     /**
@@ -19,39 +19,53 @@ public class Umbra {
     private Umbra() {
     }
 
+    /**
+     * A set of PenumbraClassLoaders that have been created through Umbra
+     */
     public static Set<PenumbraClassLoader> penumbraClassLoaders = new HashSet<>();
+
+    /**
+     * A set of ClassLoaders to use as sources
+     */
     public static Set<ClassLoader> classloaders = new HashSet<>();
 
+    /**
+     * Register a class loader for use within Umbra
+     * @param classloader A class loader
+     */
     public static void registerClassloader(ClassLoader classloader) {
         classloaders.add(classloader);
     }
 
+    /**
+     * Register a directory to load jar files from
+     * @param dir A directory
+     * @throws IOException
+     */
     public static void registerClassloader(File dir) throws IOException {
         classloaders.add(new UmbraClassLoader(dir));
     }
 
+    /**
+     * Register an array of URLs as a class loader
+     * @param urls An array of URLs to be registered
+     */
     public static void registerClassloader(URL... urls) {
         classloaders.add(new URLClassLoader((urls)));
     }
 
+    /**
+     * Check the dependencies of this program, and download any that are missing to libDir
+     *
+     * @param libDir The folder to download libraries to
+     * @return true if successful, false if otherwise
+     */
     public static boolean checkDependencies(File libDir) {
         if (libDir == null)
             throw new IllegalArgumentException("libDir must not be null!");
 
-        if (libDir.isDirectory() && !libDir.exists())
-            libDir.mkdirs();
-
         if (!libDir.isDirectory() || !libDir.exists())
             throw new IllegalArgumentException("libDir must be a directory that exists!");
-
-        if (classloaders.stream().noneMatch(loader ->
-                (loader instanceof UmbraClassLoader) && ((UmbraClassLoader) loader).directory.equals(libDir))) {
-            try {
-                registerClassloader(libDir);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
 
         InputStream umbra = Umbra.class.getClassLoader().getResourceAsStream("META-INF/.umbra");
 
@@ -86,7 +100,35 @@ public class Umbra {
         }
 
         dependencies.forEach(dep -> {
-            if (!isClassPresent(dep.classFile)) {
+            Pattern otherVersions = Pattern.compile("\\Q" + dep.group + "_" + dep.module + "_" + "\\E.*\\.jar");
+            Pattern ourVersion = Pattern.compile("\\Q" + dep.group + "_" + dep.module + "_" + dep.version + ".jar\\E");
+            try {
+                Files.walk(libDir.toPath())
+                        .filter(path -> otherVersions.matcher(path.getFileName().toString()).matches())
+                        .filter(path -> !ourVersion.matcher(path.getFileName().toString()).matches())
+                        .forEach(path -> {
+                            try {
+                                Files.deleteIfExists(path);
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                        });
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
+
+        if (classloaders.stream().noneMatch(loader ->
+                (loader instanceof UmbraClassLoader) && ((UmbraClassLoader) loader).directory.equals(libDir))) {
+            try {
+                registerClassloader(libDir);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        dependencies.forEach(dep -> {
+            if (resourceForName(dep.classFile) == null) {
                 File destination = new File(libDir, dep.qualifier + ".jar");
 
                 repositories.forEach(repository -> {
@@ -116,13 +158,11 @@ public class Umbra {
 
                         InputStream input = conn.getInputStream();
 
-                        if (conn.getResponseCode() != 200) {
-                        } else {
+                        if (conn.getResponseCode() == 200) {
                             Files.copy(input, destination.toPath(), StandardCopyOption.REPLACE_EXISTING);
                             rescan();
                         }
-                    } catch (MalformedURLException malformed) {
-                    } catch (IOException e) {
+                    } catch (IOException ignored) {
                     }
                 });
             }
@@ -157,6 +197,23 @@ public class Umbra {
         return resourceForName(loading) != null;
     }
 
+    public static ClassLoader classLoaderForClass(String name) {
+        return classLoaderForClass(name, false);
+    }
+    public static ClassLoader classLoaderForClass(String name, boolean ignorePenumbra) {
+        String loading = name.replace(".class", "").replace('.', '/').concat(".class");
+
+        for (ClassLoader classloader : classloaders) {
+            if (ignorePenumbra && (classloader instanceof PenumbraClassLoader || classloader.getParent() instanceof PenumbraClassLoader))
+                continue;
+
+            if (classloader.getResource(loading) != null)
+                return classloader;
+        }
+
+        return null;
+    }
+
     public static void rescan() {
         for (ClassLoader classLoader : classloaders) {
             if (classLoader instanceof UmbraClassLoader) {
@@ -167,10 +224,18 @@ public class Umbra {
         }
     }
 
+    /**
+     * Hook the system class loader with a PenumbraClassLoader
+     * @throws IllegalAccessException
+     */
     public static void hookSystem() throws IllegalAccessException {
         penumbraClassLoaders.add(new PenumbraClassLoader(ClassLoader.getSystemClassLoader()));
     }
 
+    /**
+     * Hook the calling class with a PenumbraClassLoader
+     * @throws IllegalAccessException
+     */
     public static void hookClassLoader() throws IllegalAccessException {
         Class clazz = classForName(Thread.currentThread().getStackTrace()[2].getClassName());
         penumbraClassLoaders.add(new PenumbraClassLoader(Objects.requireNonNull(clazz).getClassLoader()));
@@ -179,5 +244,11 @@ public class Umbra {
     static {
         classloaders.add(ClassLoader.getSystemClassLoader());
         classloaders.add(Umbra.class.getClassLoader());
+
+        try {
+            hookSystem();
+        } catch (IllegalAccessException e) {
+            e.printStackTrace();
+        }
     }
 }

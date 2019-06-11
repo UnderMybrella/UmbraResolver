@@ -17,10 +17,11 @@ public class UmbraClassLoader extends URLClassLoader {
         super(new URL[0], ClassLoader.getSystemClassLoader());
         if (directory == null)
             throw new IllegalArgumentException("libDir must not be null!");
+
         if (!directory.isDirectory() || !directory.exists())
             throw new IllegalArgumentException("libDir must be a directory that exists!");
 
-        this.directory = directory;
+        this.directory = directory.getAbsoluteFile();
         rescan();
     }
 
